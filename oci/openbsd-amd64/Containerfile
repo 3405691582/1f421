@@ -1,0 +1,46 @@
+ARG VERSION=7.8 SUFFIX=78 OSREV=7.8 SITE=site-cloud-init:latest
+
+#FROM scratch AS site
+#COPY site78.tgz /usr/local/share/site/site78.tgz
+FROM ${SITE} AS site
+
+FROM alpine AS a
+ARG VERSION SUFFIX
+RUN apk add qemu-system-x86_64 qemu-img python3 curl outils-sha256
+WORKDIR /tmp/tftp/cdn
+ADD https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/BUILDINFO \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/INSTALL.amd64 \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/SHA256.sig \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/bsd \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/bsd.mp \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/bsd.rd \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/base${SUFFIX}.tgz \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/comp${SUFFIX}.tgz \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/xbase${SUFFIX}.tgz \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/xshare${SUFFIX}.tgz .
+COPY --from=site /usr/local/share/site/site${SUFFIX}.tgz .
+RUN ls -l > index.txt
+WORKDIR /tmp/tftp
+ADD https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/bsd.rd bsd
+ADD https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/pxeboot auto_install
+COPY install.conf .
+WORKDIR /tmp/tftp/etc
+RUN echo 'set tty com0' > boot.conf
+WORKDIR /
+ARG SIZE=32G
+ARG KVM=""
+RUN sh -c 'python3 -m http.server -d /tmp/tftp/ 80 2>&1 &' && sleep 1 && \
+    curl http://localhost/install.conf && \
+    qemu-img create -f qcow2 /tmp/os.qcow2 ${SIZE} && \
+    qemu-system-x86_64 ${KVM} -smp 2 -m 2G \
+        -netdev user,id=net,tftp=/tmp/tftp/,bootfile=auto_install \
+        -device virtio-net-pci,netdev=net \
+        -nodefaults -no-user-config -nographic -serial stdio \
+        -drive id=out,file=/tmp/os.qcow2,format=qcow2,if=none \
+        -device virtio-blk-pci,drive=out \
+        -no-reboot
+
+FROM scratch
+LABEL org.opencontainers.image.source=https://github.com/3405691582/1f421
+LABEL org.opencontainers.image.description="OpenBSD/amd64 qcow2 image with cloud-init."
+COPY --from=a /tmp/os.qcow2 /usr/local/share/openbsd/os.qcow2

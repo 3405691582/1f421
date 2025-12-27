@@ -1,0 +1,47 @@
+ARG VERSION=7.8 SUFFIX=78 OSREV=7.8
+
+FROM alpine AS a
+ARG VERSION SUFFIX
+RUN apk add qemu-system-x86_64 qemu-img python3 curl outils-sha256
+WORKDIR /tmp/tftp/cdn
+ADD https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/BUILDINFO \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/INSTALL.amd64 \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/SHA256.sig \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/bsd \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/bsd.mp \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/bsd.rd \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/base${SUFFIX}.tgz \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/comp${SUFFIX}.tgz .
+COPY install.site .
+RUN chmod +x install.site && \
+    tar czvf site${SUFFIX}.tgz install.site && \
+    rm install.site && \
+    ls -l > index.txt
+WORKDIR /tmp/tftp
+ADD https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/bsd.rd bsd
+ADD https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/amd64/pxeboot auto_install
+COPY install.conf .
+WORKDIR /tmp/tftp/etc
+RUN echo 'set tty com0' > boot.conf
+WORKDIR /
+ARG CPU=2 MEM=4G KVM=-enable-kvm
+RUN sh -c 'python3 -m http.server -d /tmp/tftp/ 80 2>&1 &' && sleep 1 && \
+    curl http://localhost/install.conf && \
+    qemu-img create -f qcow2 /tmp/os.qcow2 8G && \
+    qemu-img create -f qcow2 /tmp/out.qcow2 1G && \
+    qemu-system-x86_64 \
+        ${KVM} \
+        -smp ${CPU} \
+        -m ${MEM} \
+        -netdev user,id=net,tftp=/tmp/tftp/,bootfile=auto_install \
+        -device virtio-net-pci,netdev=net \
+        -nodefaults -no-user-config -nographic -serial stdio \
+        -drive id=os,file=/tmp/os.qcow2,format=qcow2,if=none -device virtio-blk-pci,drive=os \
+        -drive id=out,file=/tmp/out.qcow2,format=qcow2,if=none -device virtio-blk-pci,drive=out
+RUN qemu-img convert -f qcow2 -O raw /tmp/out.qcow2 /tmp/out.tar && \
+    mkdir /usr/local/share/tape && tar x -C /usr/local/share/tape/ -vf /tmp/out.tar
+
+FROM scratch
+ARG SUFFIX
+WORKDIR /usr/local/share/site/
+COPY --from=a /usr/local/share/tape/site.tgz site${SUFFIX}.tgz

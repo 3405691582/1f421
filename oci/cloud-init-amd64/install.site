@@ -1,0 +1,35 @@
+#!/bin/sh
+
+cat <<EOF > /etc/rc.local
+echo 'https://cdn.openbsd.org/pub/OpenBSD' > /etc/installurl
+export PATH=/usr/local/bin:$PATH
+pkg_add git meson python%3 py3-jinja2 py3-yaml py3-requests py3-configobj py3-jsonpatch py3-pip
+git clone -b 25.3 https://github.com/canonical/cloud-init /tmp/cloud-init/
+meson setup -Dinit_system=openbsd -Dbash_completion=false /tmp/build/ /tmp/cloud-init/
+ninja -C /tmp/build
+meson install -C /tmp/build
+pip install pyinstaller --break-system-packages
+for f in /usr/local/bin/cloud-id /usr/local/bin/cloud-init; do
+    pyinstaller \
+        --distpath=/tmp/dist/ -F \
+        --hidden-import cloudinit.mergers.m_list \
+        --hidden-import cloudinit.mergers.m_dict \
+        --hidden-import cloudinit.mergers.m_str \
+        --hidden-import cloudinit.distros.openbsd \
+        --hidden-import cloudinit.sources.DataSourceNoCloud \
+        --hidden-import cloudinit.config.cc_write_files \
+        --add-binary /usr/local/lib/libintl.so.8.1:. \
+        --add-binary /usr/local/lib/libiconv.so.7.1:. \
+        --add-binary /usr/local/lib/libb2.so.0.0:. \
+        --add-binary /usr/local/lib/libffi.so.2.4:. \
+        \${f};
+done
+mkdir -p /tmp/site/usr/local/bin /tmp/site/etc/cloud
+cp /tmp/dist/cloud-id /tmp/dist/cloud-init /tmp/site/usr/local/bin/
+cp /tmp/build/cloud.cfg /tmp/site/etc/cloud/cloud.cfg
+echo 'https://cdn.openbsd.org/pub/OpenBSD' > /tmp/site/etc/installurl
+echo '/usr/local/bin/cloud-init init -l' > /tmp/site/etc/rc.firsttime
+tar czvf /tmp/site.tgz -C /tmp/site/ usr etc
+tar cvf /dev/sd1c -C /tmp/ site.tgz
+halt -p
+EOF

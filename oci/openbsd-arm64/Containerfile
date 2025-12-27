@@ -1,0 +1,105 @@
+ARG VERSION=7.8 SUFFIX=78 OSREV=7.8 SITE=site-cloud-init:latest
+
+FROM alpine AS installer
+ARG VERSION
+RUN apk add xorriso qemu-system-x86_64 qemu-img
+RUN mkdir -p /usr/local/share/cidata && \
+    echo '{"instance-id": "iid-local01", "dsmode": "local" }' > /usr/local/share/cidata/meta-data && \
+    echo '#cloud-config' > /usr/local/share/cidata/user-data && \
+    echo 'timezone: US/Eastern' >> /usr/local/share/cidata/user-data && \
+    echo 'write_files:' >> /usr/local/share/cidata/user-data && \
+    echo '- content: |' >> /usr/local/share/cidata/user-data && \
+    echo '    set -ex' >> /usr/local/share/cidata/user-data && \
+    echo '    function atexit { halt -p; }' >> /usr/local/share/cidata/user-data && \
+    echo '    trap atexit EXIT' >> /usr/local/share/cidata/user-data && \
+    echo "    printf '\033\143'" >> /usr/local/share/cidata/user-data && \
+    echo '    mount /dev/sd3c /mnt' >> /usr/local/share/cidata/user-data && \
+    echo "    ftp -o /tmp/bsd.rd https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/arm64/bsd.rd" >> /usr/local/share/cidata/user-data && \
+    echo '    rdsetroot -x /tmp/bsd.rd /root/rd' >> /usr/local/share/cidata/user-data && \
+    echo '    mkdir /tmp/rd' >> /usr/local/share/cidata/user-data && \
+    echo '    vnconfig vnd0 /root/rd' >> /usr/local/share/cidata/user-data && \
+    echo '    mount /dev/vnd0a /tmp/rd' >> /usr/local/share/cidata/user-data && \
+    echo '    cp /mnt/install.conf /tmp/rd/auto_install.conf' >> /usr/local/share/cidata/user-data && \
+    echo '    umount /tmp/rd' >> /usr/local/share/cidata/user-data && \
+    echo '    vnconfig -u vnd0' >> /usr/local/share/cidata/user-data && \
+    echo '    rdsetroot /tmp/bsd.rd /root/rd' >> /usr/local/share/cidata/user-data && \
+    echo '    echo 0 > /tmp/result' >> /usr/local/share/cidata/user-data && \
+    echo '    tar cvf /dev/sd1c -C /tmp result bsd.rd' >> /usr/local/share/cidata/user-data && \
+    echo '    halt -p' >> /usr/local/share/cidata/user-data && \
+    echo '  path: /etc/rc.local' >> /usr/local/share/cidata/user-data && \
+    echo "  permissions: '0755'" >> /usr/local/share/cidata/user-data
+COPY install.conf /usr/local/share/cidata
+COPY --from=ghcr.io/3405691582/openbsd-amd64:7.8 \
+    /usr/local/share/openbsd/os.qcow2 /usr/local/share/vm/os.qcow2
+ENV CPU=2 MEM=4G SCRATCH=128K TAPE=128M
+RUN xorriso -volid CIDATA -joliet on -rockridge on \
+      -outdev /usr/local/share/vm/localds.img \
+      -map /usr/local/share/cidata/ / && \
+    qemu-img create -f qcow2 /usr/local/share/vm/scratch.qcow2 ${SCRATCH} && \
+    qemu-img create -f qcow2 /usr/local/share/vm/tape.qcow2 ${TAPE} && \
+    qemu-system-x86_64 \
+      -smp ${CPU} \
+      -m ${MEM} \
+      -nodefaults -no-user-config -nographic \
+      -serial stdio \
+      -nic user,model=virtio-net-pci \
+      -drive id=os,file=/usr/local/share/vm/os.qcow2,format=qcow2,if=none \
+      -device virtio-blk-pci,drive=os \
+      -drive id=tape,file=/usr/local/share/vm/tape.qcow2,format=qcow2,if=none \
+      -device virtio-blk-pci,drive=tape \
+      -drive id=scratch,file=/usr/local/share/vm/scratch.qcow2,format=qcow2,if=none \
+      -device virtio-blk-pci,drive=scratch \
+      -drive id=cidata,file=/usr/local/share/vm/localds.img,format=raw,if=none \
+      -device virtio-blk-pci,drive=cidata && \
+    qemu-img convert -f qcow2 -O raw \
+      /usr/local/share/vm/tape.qcow2 /usr/local/share/vm/tape.tar && \
+    mkdir -p /usr/local/share/tape && \
+    tar x -C /usr/local/share/tape/ -vf /usr/local/share/vm/tape.tar
+
+#FROM scratch AS site
+#COPY site78.tgz /usr/local/share/site/site78.tgz
+FROM ${SITE} AS site
+
+FROM alpine AS a
+ARG VERSION SUFFIX
+RUN apk add qemu-system-aarch64 qemu-img python3 curl outils-sha256
+WORKDIR /tmp/tftp/cdn
+ADD https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/arm64/BUILDINFO \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/arm64/INSTALL.arm64 \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/arm64/SHA256.sig \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/arm64/bsd \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/arm64/bsd.mp \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/arm64/bsd.rd \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/arm64/base${SUFFIX}.tgz \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/arm64/comp${SUFFIX}.tgz \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/arm64/xbase${SUFFIX}.tgz \
+    https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/arm64/xshare${SUFFIX}.tgz .
+COPY --from=site /usr/local/share/site/site${SUFFIX}.tgz .
+RUN ls -l > index.txt
+WORKDIR /tmp/tftp
+COPY --from=installer /usr/local/share/tape/bsd.rd bsd
+ADD https://cdn.openbsd.org/pub/OpenBSD/${VERSION}/arm64/BOOTAA64.EFI auto_install
+COPY install.conf .
+WORKDIR /tmp/tftp/etc
+WORKDIR /
+ADD http://cdn.openbsd.org/pub/OpenBSD/7.8/packages/aarch64/u-boot-aarch64-2021.10p11.tgz /tmp
+RUN tar xzvf /tmp/u-boot-aarch64-2021.10p11.tgz share/u-boot/qemu_arm64/u-boot.bin -C /tmp
+ARG SIZE=32G KVM="-enable-kvm"
+RUN sh -c 'python3 -m http.server -d /tmp/tftp/ 80 2>&1 &' && sleep 1 && \
+    curl http://localhost/install.conf && \
+    qemu-img create -f qcow2 /tmp/os.qcow2 ${SIZE} && \
+    qemu-system-aarch64 -M virt \
+        ${KVM} -cpu host \
+        -smp 2 \
+        -m 2G \
+        -bios /tmp/share/u-boot/qemu_arm64/u-boot.bin \
+        -nodefaults -no-user-config -nographic -serial stdio \
+        -netdev user,id=net,tftp=/tmp/tftp,bootfile=auto_install -device virtio-net-pci,netdev=net \
+        -drive id=out,file=/tmp/os.qcow2,format=qcow2,if=none \
+        -device virtio-blk-pci,drive=out \
+        -no-reboot
+
+FROM scratch
+LABEL org.opencontainers.image.source=https://github.com/3405691582/1f421
+LABEL org.opencontainers.image.description="OpenBSD/arm64 qcow2 image with cloud-init."
+COPY --from=a /tmp/os.qcow2 /usr/local/share/openbsd/os.qcow2
