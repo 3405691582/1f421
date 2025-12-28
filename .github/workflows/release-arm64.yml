@@ -1,0 +1,77 @@
+name: Release (arm64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version'
+        required: true
+        type: string
+        default: "7.8"
+
+jobs:
+  release-arm64:
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    services:
+      registry:
+        image: registry:3
+        ports:
+          - 5000:5000
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Local file edits for Docker compatibility
+        run: |
+            sed -i -e '/cpu host/s/..KVM. -cpu host/-cpu neoverse-n1/' \
+                $GITHUB_WORKSPACE/oci/cloud-init-arm64/Containerfile
+            sed -i -e '/cpu host/s/..KVM. -cpu host/-cpu neoverse-n1/' \
+                $GITHUB_WORKSPACE/oci/openbsd-arm64/Containerfile
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-flags: "--allow-insecure-entitlement security.insecure"
+          driver-opts: network=host
+
+      - name: Build cloud-init
+        uses: docker/build-push-action@v6
+        with:
+          allow: security.insecure
+          build-args: |
+              VERSION=${{ inputs.version }}
+              CPU=4
+              MEM=16G
+          context: "./oci/cloud-init-arm64"
+          file: "./oci/cloud-init-arm64/Containerfile"
+          build-contexts: |
+              port=.
+          tags: localhost:5000/site-cloud-init:latest
+          push: true
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          allow: security.insecure
+          build-args: |
+              VERSION=${{ inputs.version }}
+              SITE=localhost:5000/site-cloud-init:latest
+              CPU=4
+              MEM=16G
+          context: "./oci/openbsd-arm64"
+          file: "./oci/openbsd-arm64/Containerfile"
+          build-contexts: |
+              port=.
+          tags: ghcr.io/3405691582/openbsd-arm64:${{ inputs.version }}
+          provenance: false
+          push: true
