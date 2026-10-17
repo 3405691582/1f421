@@ -1,7 +1,7 @@
-ARG VERSION=7.8 SUFFIX=78 OSREV=7.8 SITE=site-cloud-init:latest
+ARG VERSION=7.9 SUFFIX=79 OSREV=7.9 SITE=site-cloud-init:latest
 
 #FROM scratch AS site
-#COPY site78.tgz /usr/local/share/site/site78.tgz
+#COPY site79.tgz /usr/local/share/site/site79.tgz
 FROM ${SITE} AS site
 
 FROM alpine AS a

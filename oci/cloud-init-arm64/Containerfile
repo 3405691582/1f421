@@ -1,4 +1,4 @@
-ARG VERSION=7.8 SUFFIX=78 OSREV=7.8
+ARG VERSION=7.9 SUFFIX=79 OSREV=7.9
 
 FROM alpine AS installer
 ARG VERSION
@@ -29,7 +29,7 @@ RUN mkdir -p /usr/local/share/cidata && \
     echo '  path: /etc/rc.local' >> /usr/local/share/cidata/user-data && \
     echo "  permissions: '0755'" >> /usr/local/share/cidata/user-data
 COPY install.conf /usr/local/share/cidata
-COPY --from=ghcr.io/3405691582/openbsd-amd64:7.8 \
+COPY --from=ghcr.io/3405691582/openbsd-amd64:7.9 \
     /usr/local/share/openbsd/os.qcow2 /usr/local/share/vm/os.qcow2
 ENV CPU=2 MEM=4G SCRATCH=128K TAPE=128M
 RUN xorriso -volid CIDATA -joliet on -rockridge on \
@@ -80,8 +80,8 @@ COPY install.conf .
 WORKDIR /tmp/tftp/etc
 RUN echo 'set tty com0' > boot.conf
 WORKDIR /
-ADD http://cdn.openbsd.org/pub/OpenBSD/7.8/packages/aarch64/u-boot-aarch64-2021.10p11.tgz /tmp
-RUN tar xzvf /tmp/u-boot-aarch64-2021.10p11.tgz share/u-boot/qemu_arm64/u-boot.bin -C /tmp
+ADD http://cdn.openbsd.org/pub/OpenBSD/7.9/packages/aarch64/u-boot-aarch64-2021.10p14.tgz /tmp
+RUN tar xzvf /tmp/u-boot-aarch64-2021.10p14.tgz share/u-boot/qemu_arm64/u-boot.bin -C /tmp
 ARG CPU=2 MEM=4G KVM="-enable-kvm"
 RUN sh -c 'python3 -m http.server -d /tmp/tftp/ 80 2>&1 &' && sleep 1 && \
     curl http://localhost/install.conf && \
